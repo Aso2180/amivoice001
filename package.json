@@ -1,0 +1,13 @@
+{
+  "name": "amivoice-realtime-transcription",
+  "version": "1.0.0",
+  "description": "リアルタイム音声文字起こしアプリケーション",
+  "main": "app/static/js/app.js",
+  "scripts": {
+    "dev": "python app/server.py",
+    "build": "echo 'Building application...'",
+    "start": "gunicorn --bind 0.0.0.0:5000 app.server:app"
+  },
+  "author": "Aso2180",
+  "license": "MIT"
+}

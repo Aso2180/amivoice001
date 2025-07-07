@@ -1,0 +1,150 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AmiVoice リアルタイム音声文字起こし</title>
+    <meta name="description" content="WebSocketを使用したリアルタイム音声認識・文字起こしアプリケーション">
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="/static/css/app.css">
+    
+    <!-- favicon -->
+    <link rel="icon" type="image/x-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+</head>
+<body>
+    <div class="container">
+        <!-- ヘッダー -->
+        <header class="app-header">
+            <h1>🎤 AmiVoice リアルタイム音声文字起こし</h1>
+            <p class="subtitle">マイクからの音声をWebSocketでリアルタイムに文字起こしします</p>
+            <div class="version-info">
+                <span id="app-version">Loading...</span>
+                <span class="separator">|</span>
+                <span id="connection-indicator" class="indicator disconnected">未接続</span>
+            </div>
+        </header>
+
+        <!-- API設定セクション -->
+        <section class="config-section">
+            <h3>🔧 API設定</h3>
+            <div class="config-grid">
+                <div class="input-group">
+                    <label for="api-key">AmiVoice APIキー:</label>
+                    <input type="password" id="api-key" placeholder="APIキーを入力してください" autocomplete="off">
+                    <small class="help-text">※APIキーはローカルストレージに保存されます</small>
+                </div>
+                <div class="input-group">
+                    <label for="grammar-select">認識エンジン:</label>
+                    <select id="grammar-select">
+                        <option value="-a-general">汎用（日常会話）</option>
+                        <option value="-a-business">ビジネス</option>
+                        <option value="-a-medical">医療</option>
+                        <option value="-a-lecture">講演・プレゼン</option>
+                    </select>
+                </div>
+            </div>
+        </section>
+
+        <!-- 制御セクション -->
+        <section class="control-section">
+            <h3>🎛️ 音声認識制御</h3>
+            <div class="control-buttons">
+                <button id="connect-btn" class="btn btn-primary">
+                    <span class="btn-icon">🔌</span>
+                    <span class="btn-text">接続</span>
+                </button>
+                <button id="record-btn" class="btn btn-success" disabled>
+                    <span class="btn-icon">🎙️</span>
+                    <span class="btn-text">録音開始</span>
+                </button>
+                <button id="pause-btn" class="btn btn-warning" disabled>
+                    <span class="btn-icon">⏸️</span>
+                    <span class="btn-text">録音停止</span>
+                </button>
+                <button id="disconnect-btn" class="btn btn-danger" disabled>
+                    <span class="btn-icon">🔌</span>
+                    <span class="btn-text">切断</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- ステータス表示 -->
+        <section class="status-section">
+            <h3>📊 ステータス</h3>
+            <div class="status-grid">
+                <div class="status-card">
+                    <div class="status-label">接続状態</div>
+                    <div id="connection-status" class="status-value disconnected">未接続</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">録音状態</div>
+                    <div id="recording-status" class="status-value stopped">停止中</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">音声レベル</div>
+                    <div class="audio-level-container">
+                        <div id="audio-level" class="audio-level">
+                            <div class="level-bar"></div>
+                        </div>
+                        <span id="level-percentage">0%</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 認識結果表示 -->
+        <section class="results-section">
+            <div class="results-grid">
+                <!-- 中間結果 -->
+                <div class="interim-panel">
+                    <h3>🔄 認識中の結果</h3>
+                    <div id="interim-result" class="interim-display">
+                        音声認識の中間結果がここにリアルタイムで表示されます...
+                    </div>
+                </div>
+
+                <!-- 最終結果 -->
+                <div class="final-panel">
+                    <h3>✅ 確定した結果</h3>
+                    <div class="results-toolbar">
+                        <button id="clear-results-btn" class="btn btn-sm">🗑️ クリア</button>
+                        <button id="copy-results-btn" class="btn btn-sm">📋 コピー</button>
+                        <button id="download-results-btn" class="btn btn-sm">💾 ダウンロード</button>
+                        <div class="results-stats">
+                            <span id="word-count">単語数: 0</span>
+                            <span class="separator">|</span>
+                            <span id="result-count">結果数: 0</span>
+                        </div>
+                    </div>
+                    <div id="final-results" class="final-display">
+                        <!-- 確定した認識結果がここに追加されます -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- フッター -->
+        <footer class="app-footer">
+            <p>&copy; 2024 AmiVoice Real-time Transcription App | 
+            <a href="https://github.com/Aso2180/amivoice001" target="_blank">GitHub</a></p>
+        </footer>
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading-indicator" class="loading-overlay" style="display: none;">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">処理中...</div>
+    </div>
+
+    <!-- Notification Container -->
+    <div id="notification-container" class="notification-container"></div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/wrp.js"></script>
+    <script src="/static/js/recorder.js"></script>
+    <script src="/static/js/result.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
