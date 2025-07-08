@@ -1,5 +1,5 @@
 /**
- * AmiVoice リアルタイム音声文字起こしアプリケーション - 音声入力対応版
+ * AmiVoice リアルタイム音声文字起こしアプリケーション - 公式仕様準拠版
  */
 class AmiVoiceRealtimeApp {
     constructor() {
@@ -16,7 +16,8 @@ class AmiVoiceRealtimeApp {
         this.analyser = null;
         this.dataArray = null;
         this.audioSource = null;
-        this.audioWorkletNode = null;
+        this.scriptProcessor = null;
+        this.isAudioStreaming = false;
         
         // 統計情報
         this.stats = {
@@ -29,7 +30,7 @@ class AmiVoiceRealtimeApp {
         this.initializeElements();
         this.initializeEventListeners();
         
-        // アプリケーション初期化（少し遅延させる）
+        // アプリケーション初期化
         setTimeout(() => {
             this.initialize();
         }, 100);
@@ -170,7 +171,8 @@ class AmiVoiceRealtimeApp {
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true,
-                    sampleRate: 16000
+                    sampleRate: 16000,
+                    channelCount: 1
                 }
             });
             
@@ -190,6 +192,21 @@ class AmiVoiceRealtimeApp {
             this.audioSource = this.audioContext.createMediaStreamSource(this.mediaStream);
             this.audioSource.connect(this.analyser);
             
+            // ScriptProcessorNodeの作成（PCMデータ取得用）
+            const bufferSize = 4096;
+            this.scriptProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+            
+            // PCM音声データ処理
+            this.scriptProcessor.onaudioprocess = (event) => {
+                if (this.isAudioStreaming && this.wrp) {
+                    this.processMicrophoneAudio(event);
+                }
+            };
+            
+            // 音声処理チェーンの接続
+            this.audioSource.connect(this.scriptProcessor);
+            this.scriptProcessor.connect(this.audioContext.destination);
+            
             // 音声レベル監視の開始
             this.startAudioLevelMonitoring();
             
@@ -200,6 +217,44 @@ class AmiVoiceRealtimeApp {
             console.error('音声システム初期化エラー:', error);
             this.showNotification(`マイクアクセスエラー: ${error.message}`, 'error');
             throw error;
+        }
+    }
+    
+    /**
+     * マイクロフォン音声の処理
+     */
+    processMicrophoneAudio(event) {
+        try {
+            const inputBuffer = event.inputBuffer;
+            const inputData = inputBuffer.getChannelData(0);
+            
+            // Float32ArrayをInt16Arrayに変換（16bit PCM）
+            const int16Array = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            
+            // Uint8Arrayに変換
+            const uint8Array = new Uint8Array(int16Array.buffer);
+            
+            // 認識結果情報待機数チェック（公式仕様準拠）
+            const waitingResults = this.wrp.getWaitingResults ? this.wrp.getWaitingResults() : 0;
+            if (waitingResults > 1) {
+                console.log('待機中の結果が多すぎます:', waitingResults);
+                return;
+            }
+            
+            // Wrpに音声データを送信（公式仕様準拠）
+            const success = this.wrp.feedData(uint8Array, 0, uint8Array.length);
+            if (success) {
+                console.log('PCM音声データ送信成功:', uint8Array.length, 'bytes');
+            } else {
+                console.error('PCM音声データ送信失敗');
+            }
+            
+        } catch (error) {
+            console.error('音声データ処理エラー:', error);
         }
     }
     
@@ -242,239 +297,127 @@ class AmiVoiceRealtimeApp {
     }
     
     /**
-     * Wrpライブラリの初期化（複数の方法を試行）
+     * Wrpライブラリの初期化
      */
     initializeWrpLibrary() {
         console.log('🔍 Wrpライブラリの確認を開始します...');
         
-        // グローバルスコープでWrpの存在確認
-        console.log('window.Wrp:', typeof window.Wrp);
-        console.log('Wrp:', typeof Wrp);
-        
-        // 1. 直接Wrp関数として使用
         if (typeof Wrp === 'function') {
             try {
-                console.log('方法1: Wrp()として初期化を試行...');
+                console.log('Wrp()として初期化を試行...');
                 this.wrp = Wrp();
                 console.log('✅ Wrp()として初期化成功');
                 console.log('Wrpバージョン:', this.wrp.version);
-                this.setupWrpCallbacks();
+                this.setupWrpConfiguration();
                 return;
             } catch (error) {
-                console.warn('方法1失敗:', error);
+                console.warn('Wrp()初期化失敗:', error);
             }
         }
         
-        // 2. newキーワードを使用
-        if (typeof Wrp === 'function') {
-            try {
-                console.log('方法2: new Wrp()として初期化を試行...');
-                this.wrp = new Wrp();
-                console.log('✅ new Wrp()として初期化成功');
-                console.log('Wrpバージョン:', this.wrp.version);
-                this.setupWrpCallbacks();
-                return;
-            } catch (error) {
-                console.warn('方法2失敗:', error);
-            }
-        }
-        
-        // 3. Wrpがオブジェクトの場合
-        if (typeof Wrp === 'object' && Wrp !== null) {
-            try {
-                console.log('方法3: Wrpオブジェクトとして使用を試行...');
-                this.wrp = Wrp;
-                console.log('✅ Wrpオブジェクトとして使用成功');
-                console.log('Wrpバージョン:', this.wrp.version);
-                this.setupWrpCallbacks();
-                return;
-            } catch (error) {
-                console.warn('方法3失敗:', error);
-            }
-        }
-        
-        // 4. window.Wrpを試行
-        if (typeof window.Wrp !== 'undefined') {
-            try {
-                console.log('方法4: window.Wrp()として初期化を試行...');
-                this.wrp = window.Wrp();
-                console.log('✅ window.Wrp()として初期化成功');
-                console.log('Wrpバージョン:', this.wrp.version);
-                this.setupWrpCallbacks();
-                return;
-            } catch (error) {
-                console.warn('方法4失敗:', error);
-            }
-        }
-        
-        // 5. 遅延初期化を試行
-        console.log('方法5: 遅延初期化を試行...');
-        setTimeout(() => {
-            this.retryWrpInitialization();
-        }, 1000);
-    }
-    
-    /**
-     * Wrp初期化の再試行
-     */
-    retryWrpInitialization() {
-        console.log('🔄 Wrp初期化を再試行します...');
-        
-        if (typeof Wrp === 'function') {
-            try {
-                this.wrp = Wrp();
-                console.log('✅ 遅延初期化成功');
-                this.setupWrpCallbacks();
-                this.showNotification('Wrpライブラリが正常に初期化されました', 'success');
-                return;
-            } catch (error) {
-                console.error('遅延初期化失敗:', error);
-            }
-        }
-        
-        // すべて失敗した場合
         console.error('❌ Wrpライブラリの初期化に失敗しました');
-        this.showNotification('Wrpライブラリが読み込まれていません。ページを再読み込みしてください。', 'error');
+        this.showNotification('Wrpライブラリが読み込まれていません', 'error');
     }
     
     /**
-     * Wrpライブラリのコールバック設定
+     * Wrpライブラリの設定（公式仕様準拠）
      */
-    setupWrpCallbacks() {
+    setupWrpConfiguration() {
         if (!this.wrp) {
             console.error('❌ Wrpインスタンスが見つかりません');
             return;
         }
         
-        console.log('🔧 Wrpコールバックを設定中...');
+        console.log('🔧 Wrpライブラリを設定中...');
         
         try {
-            // 接続完了コールバック
-            this.wrp.connectEnded = () => {
-                console.log('WebSocket接続完了');
-                this.isConnected = true;
-                this.updateConnectionStatus('connected', '接続済み');
-                this.enableRecordingControls();
-                this.showNotification('WebSocket接続が完了しました', 'success');
-            };
-            
-            // 切断完了コールバック
-            this.wrp.disconnectEnded = () => {
-                console.log('WebSocket切断完了');
-                this.isConnected = false;
-                this.isRecording = false;
-                this.updateConnectionStatus('disconnected', '未接続');
-                this.updateRecordingStatus('stopped', '停止中');
-                this.resetControls();
-                this.showNotification('WebSocket接続を切断しました', 'info');
-            };
-            
-            // 録音開始完了コールバック
-            this.wrp.feedDataResumeEnded = () => {
-                console.log('録音開始完了');
-                this.isRecording = true;
-                this.updateRecordingStatus('recording', '録音中');
-                this.elements.recordBtn.disabled = true;
-                this.elements.pauseBtn.disabled = false;
-                this.showNotification('音声録音を開始しました', 'success');
+            // リスナーオブジェクトの作成（公式仕様準拠）
+            const listener = {
+                connectEnded: () => {
+                    console.log('✅ WebSocket接続完了');
+                    this.isConnected = true;
+                    this.updateConnectionStatus('connected', '接続済み');
+                    this.enableRecordingControls();
+                    this.showNotification('WebSocket接続が完了しました', 'success');
+                },
                 
-                // 音声データ送信開始
-                this.startAudioDataStreaming();
-            };
-            
-            // 録音停止完了コールバック
-            this.wrp.feedDataPauseEnded = () => {
-                console.log('録音停止完了');
-                this.isRecording = false;
-                this.updateRecordingStatus('paused', '一時停止');
-                this.elements.recordBtn.disabled = false;
-                this.elements.pauseBtn.disabled = true;
-                this.showNotification('音声録音を停止しました', 'info');
+                disconnectEnded: () => {
+                    console.log('✅ WebSocket切断完了');
+                    this.isConnected = false;
+                    this.isRecording = false;
+                    this.isAudioStreaming = false;
+                    this.updateConnectionStatus('disconnected', '未接続');
+                    this.updateRecordingStatus('stopped', '停止中');
+                    this.resetControls();
+                    this.showNotification('WebSocket接続を切断しました', 'info');
+                },
                 
-                // 音声データ送信停止
-                this.stopAudioDataStreaming();
-            };
-            
-            // 中間結果更新コールバック
-            this.wrp.resultUpdated = (result) => {
-                console.log('中間結果:', result);
-                const text = this.extractTextFromResult(result);
-                this.displayInterimResult(text);
-            };
-            
-            // 最終結果確定コールバック
-            this.wrp.resultFinalized = (result) => {
-                console.log('最終結果:', result);
-                const text = this.extractTextFromResult(result);
-                if (text.trim()) {
-                    this.addFinalResult(text, result);
-                    this.clearInterimResult();
-                    this.updateStats();
+                feedDataResumeEnded: () => {
+                    console.log('✅ 録音開始完了');
+                    this.isRecording = true;
+                    this.isAudioStreaming = true;
+                    this.updateRecordingStatus('recording', '録音中');
+                    this.elements.recordBtn.disabled = true;
+                    this.elements.pauseBtn.disabled = false;
+                    this.showNotification('音声録音を開始しました', 'success');
+                },
+                
+                feedDataPauseEnded: () => {
+                    console.log('✅ 録音停止完了');
+                    this.isRecording = false;
+                    this.isAudioStreaming = false;
+                    this.updateRecordingStatus('paused', '一時停止');
+                    this.elements.recordBtn.disabled = false;
+                    this.elements.pauseBtn.disabled = true;
+                    this.showNotification('音声録音を停止しました', 'info');
+                },
+                
+                utteranceStarted: (startTime) => {
+                    console.log('🎙️ 発話開始:', startTime);
+                },
+                
+                utteranceEnded: (endTime) => {
+                    console.log('🎙️ 発話終了:', endTime);
+                },
+                
+                resultCreated: () => {
+                    console.log('📝 結果作成');
+                },
+                
+                resultUpdated: (result) => {
+                    console.log('🔄 中間結果受信:', result);
+                    const text = this.extractTextFromResult(result);
+                    this.displayInterimResult(text);
+                },
+                
+                resultFinalized: (result) => {
+                    console.log('✅ 最終結果受信:', result);
+                    const text = this.extractTextFromResult(result);
+                    if (text.trim()) {
+                        this.addFinalResult(text, result);
+                        this.clearInterimResult();
+                        this.updateStats();
+                    }
+                },
+                
+                eventNotified: (eventId, eventMessage) => {
+                    console.log('📢 イベント通知:', eventId, eventMessage);
+                },
+                
+                errored: (message) => {
+                    console.error('❌ Wrpエラー:', message);
+                    this.showNotification(`音声認識エラー: ${message}`, 'error');
                 }
             };
             
-            // エラーコールバック
-            this.wrp.errored = (message) => {
-                console.error('Wrpエラー:', message);
-                this.showNotification(`音声認識エラー: ${message}`, 'error');
-            };
+            // リスナーを設定（公式仕様準拠）
+            this.wrp.setListener(listener);
             
-            console.log('✅ Wrpコールバックが設定されました');
+            console.log('✅ Wrpライブラリの設定が完了しました');
             
         } catch (error) {
-            console.error('コールバック設定エラー:', error);
-            this.showNotification(`コールバック設定エラー: ${error.message}`, 'error');
-        }
-    }
-    
-    /**
-     * 音声データストリーミング開始
-     */
-    startAudioDataStreaming() {
-        if (!this.mediaStream || !this.wrp) {
-            console.error('音声ストリームまたはWrpが初期化されていません');
-            return;
-        }
-        
-        console.log('🎵 音声データストリーミング開始');
-        
-        try {
-            // MediaRecorderの設定
-            const options = {
-                mimeType: 'audio/webm',
-                audioBitsPerSecond: 16000
-            };
-            
-            this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
-            
-            // データ受信時の処理
-            this.mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0 && this.isRecording) {
-                    // Blobを配列バッファに変換してWrpに送信
-                    event.data.arrayBuffer().then(buffer => {
-                        const audioData = new Uint8Array(buffer);
-                        this.wrp.feedData(audioData);
-                        console.log('音声データ送信:', audioData.length, 'bytes');
-                    });
-                }
-            };
-            
-            // 録音開始
-            this.mediaRecorder.start(100); // 100msごとにデータを取得
-            
-        } catch (error) {
-            console.error('音声ストリーミング開始エラー:', error);
-            this.showNotification(`音声ストリーミングエラー: ${error.message}`, 'error');
-        }
-    }
-    
-    /**
-     * 音声データストリーミング停止
-     */
-    stopAudioDataStreaming() {
-        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-            console.log('🎵 音声データストリーミング停止');
-            this.mediaRecorder.stop();
+            console.error('Wrp設定エラー:', error);
+            this.showNotification(`Wrp設定エラー: ${error.message}`, 'error');
         }
     }
     
@@ -493,7 +436,6 @@ class AmiVoiceRealtimeApp {
         
         if (!this.wrp) {
             this.showNotification('Wrpライブラリが初期化されていません', 'error');
-            console.error('Wrpインスタンスが null です');
             return;
         }
         
@@ -507,25 +449,31 @@ class AmiVoiceRealtimeApp {
             this.updateConnectionStatus('connecting', '接続中...');
             this.elements.connectBtn.disabled = true;
             
-            // Wrp設定
+            // AudioContextの再開
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+                console.log('AudioContextを再開しました');
+            }
+            
+            // Wrp設定（公式仕様準拠）
             const serverUrl = this.config?.amivoice_server_url || 'wss://acp-api.amivoice.com/v1/nolog/';
             
             console.log('接続設定を開始...');
-            console.log('Wrpインスタンス:', this.wrp);
-            console.log('serverURL設定前:', this.wrp.serverURL);
             
-            // サーバー設定
-            this.wrp.serverURL = serverUrl;
-            this.wrp.grammarFileNames = grammar;
-            this.wrp.authorization = apiKey;
+            // サーバー設定（公式仕様準拠）
+            this.wrp.setServerURL(serverUrl);
+            this.wrp.setCodec('16K');  // 重要：コーデック設定
+            this.wrp.setGrammarFileNames(grammar);
+            this.wrp.setAuthorization(apiKey);
             
             console.log('接続設定完了:', { 
-                serverUrl: this.wrp.serverURL,
-                grammar: this.wrp.grammarFileNames,
+                serverUrl,
+                codec: '16K',
+                grammar,
                 authLength: apiKey.length 
             });
             
-            // 接続実行
+            // 接続実行（公式仕様準拠）
             console.log('接続を実行中...');
             const connected = this.wrp.connect();
             console.log('接続結果:', connected);
@@ -559,14 +507,12 @@ class AmiVoiceRealtimeApp {
             return;
         }
         
-        if (!this.mediaStream) {
-            this.showNotification('マイクが初期化されていません', 'error');
-            return;
-        }
-        
         console.log('録音開始要求');
         try {
-            this.wrp.feedDataResume();
+            const success = this.wrp.feedDataResume();
+            if (!success) {
+                throw new Error('録音開始コマンドの送信に失敗しました');
+            }
         } catch (error) {
             console.error('録音開始エラー:', error);
             this.showNotification(`録音開始エラー: ${error.message}`, 'error');
@@ -581,7 +527,10 @@ class AmiVoiceRealtimeApp {
         
         console.log('録音停止要求');
         try {
-            this.wrp.feedDataPause();
+            const success = this.wrp.feedDataPause();
+            if (!success) {
+                throw new Error('録音停止コマンドの送信に失敗しました');
+            }
         } catch (error) {
             console.error('録音停止エラー:', error);
             this.showNotification(`録音停止エラー: ${error.message}`, 'error');
@@ -623,7 +572,7 @@ class AmiVoiceRealtimeApp {
             return result.text || '';
         } catch (error) {
             console.error('JSON解析エラー:', error);
-            return jsonResult; // JSONでない場合はそのまま返す
+            return jsonResult;
         }
     }
     
@@ -897,7 +846,7 @@ class AmiVoiceRealtimeApp {
      */
     cleanup() {
         // 音声ストリーミング停止
-        this.stopAudioDataStreaming();
+        this.isAudioStreaming = false;
         
         // メディアストリーム停止
         if (this.mediaStream) {
