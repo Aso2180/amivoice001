@@ -1,5 +1,5 @@
 /**
- * AmiVoice リアルタイム音声文字起こしアプリケーション
+ * AmiVoice リアルタイム音声文字起こしアプリケーション - デバッグ版
  */
 class AmiVoiceRealtimeApp {
     constructor() {
@@ -8,6 +8,7 @@ class AmiVoiceRealtimeApp {
         this.isRecording = false;
         this.transcriptionHistory = [];
         this.config = null;
+        this.wrp = null;
         
         // 統計情報
         this.stats = {
@@ -20,8 +21,10 @@ class AmiVoiceRealtimeApp {
         this.initializeElements();
         this.initializeEventListeners();
         
-        // アプリケーション初期化
-        this.initialize();
+        // アプリケーション初期化（少し遅延させる）
+        setTimeout(() => {
+            this.initialize();
+        }, 100);
         
         console.log('🎤 AmiVoice リアルタイム音声文字起こしアプリ起動');
     }
@@ -104,8 +107,8 @@ class AmiVoiceRealtimeApp {
             // 保存されたAPIキーの復元
             this.loadApiKey();
             
-            // Wrpコールバックの設定
-            this.setupWrpCallbacks();
+            // Wrpライブラリの確認と初期化
+            this.initializeWrpLibrary();
             
             // UI状態の初期化
             this.resetUIState();
@@ -144,21 +147,125 @@ class AmiVoiceRealtimeApp {
     }
     
     /**
+     * Wrpライブラリの初期化（複数の方法を試行）
+     */
+    initializeWrpLibrary() {
+        console.log('🔍 Wrpライブラリの確認を開始します...');
+        
+        // グローバルスコープでWrpの存在確認
+        console.log('window.Wrp:', typeof window.Wrp);
+        console.log('Wrp:', typeof Wrp);
+        
+        // 1. 直接Wrp関数として使用
+        if (typeof Wrp === 'function') {
+            try {
+                console.log('方法1: Wrp()として初期化を試行...');
+                this.wrp = Wrp();
+                console.log('✅ Wrp()として初期化成功');
+                console.log('Wrpバージョン:', this.wrp.version);
+                this.setupWrpCallbacks();
+                return;
+            } catch (error) {
+                console.warn('方法1失敗:', error);
+            }
+        }
+        
+        // 2. newキーワードを使用
+        if (typeof Wrp === 'function') {
+            try {
+                console.log('方法2: new Wrp()として初期化を試行...');
+                this.wrp = new Wrp();
+                console.log('✅ new Wrp()として初期化成功');
+                console.log('Wrpバージョン:', this.wrp.version);
+                this.setupWrpCallbacks();
+                return;
+            } catch (error) {
+                console.warn('方法2失敗:', error);
+            }
+        }
+        
+        // 3. Wrpがオブジェクトの場合
+        if (typeof Wrp === 'object' && Wrp !== null) {
+            try {
+                console.log('方法3: Wrpオブジェクトとして使用を試行...');
+                this.wrp = Wrp;
+                console.log('✅ Wrpオブジェクトとして使用成功');
+                console.log('Wrpバージョン:', this.wrp.version);
+                this.setupWrpCallbacks();
+                return;
+            } catch (error) {
+                console.warn('方法3失敗:', error);
+            }
+        }
+        
+        // 4. window.Wrpを試行
+        if (typeof window.Wrp !== 'undefined') {
+            try {
+                console.log('方法4: window.Wrp()として初期化を試行...');
+                this.wrp = window.Wrp();
+                console.log('✅ window.Wrp()として初期化成功');
+                console.log('Wrpバージョン:', this.wrp.version);
+                this.setupWrpCallbacks();
+                return;
+            } catch (error) {
+                console.warn('方法4失敗:', error);
+            }
+        }
+        
+        // 5. 遅延初期化を試行
+        console.log('方法5: 遅延初期化を試行...');
+        setTimeout(() => {
+            this.retryWrpInitialization();
+        }, 1000);
+    }
+    
+    /**
+     * Wrp初期化の再試行
+     */
+    retryWrpInitialization() {
+        console.log('🔄 Wrp初期化を再試行します...');
+        
+        if (typeof Wrp === 'function') {
+            try {
+                this.wrp = Wrp();
+                console.log('✅ 遅延初期化成功');
+                this.setupWrpCallbacks();
+                this.showNotification('Wrpライブラリが正常に初期化されました', 'success');
+                return;
+            } catch (error) {
+                console.error('遅延初期化失敗:', error);
+            }
+        }
+        
+        // すべて失敗した場合
+        console.error('❌ Wrpライブラリの初期化に失敗しました');
+        this.showNotification('Wrpライブラリが読み込まれていません。ページを再読み込みしてください。', 'error');
+    }
+    
+    /**
      * Wrpライブラリのコールバック設定
      */
     setupWrpCallbacks() {
-        // 基本的なコールバック設定
-        if (typeof Wrp !== 'undefined') {
-            // 接続完了
-            Wrp.connectEnded = () => {
+        if (!this.wrp) {
+            console.error('❌ Wrpインスタンスが見つかりません');
+            return;
+        }
+        
+        console.log('🔧 Wrpコールバックを設定中...');
+        
+        try {
+            // 接続完了コールバック
+            this.wrp.connectEnded = () => {
+                console.log('WebSocket接続完了');
                 this.isConnected = true;
                 this.updateConnectionStatus('connected', '接続済み');
                 this.enableRecordingControls();
                 this.showNotification('WebSocket接続が完了しました', 'success');
             };
             
-            // 切断完了
-            Wrp.disconnectEnded = () => {
+            // 切断完了コールバック
+            this.wrp.disconnectEnded = () => {
+                console.log('WebSocket切断完了');
                 this.isConnected = false;
                 this.isRecording = false;
                 this.updateConnectionStatus('disconnected', '未接続');
@@ -167,8 +274,9 @@ class AmiVoiceRealtimeApp {
                 this.showNotification('WebSocket接続を切断しました', 'info');
             };
             
-            // 録音開始完了
-            Wrp.feedDataResumeEnded = () => {
+            // 録音開始完了コールバック
+            this.wrp.feedDataResumeEnded = () => {
+                console.log('録音開始完了');
                 this.isRecording = true;
                 this.updateRecordingStatus('recording', '録音中');
                 this.elements.recordBtn.disabled = true;
@@ -176,8 +284,9 @@ class AmiVoiceRealtimeApp {
                 this.showNotification('音声録音を開始しました', 'success');
             };
             
-            // 録音停止完了
-            Wrp.feedDataPauseEnded = () => {
+            // 録音停止完了コールバック
+            this.wrp.feedDataPauseEnded = () => {
+                console.log('録音停止完了');
                 this.isRecording = false;
                 this.updateRecordingStatus('paused', '一時停止');
                 this.elements.recordBtn.disabled = false;
@@ -185,14 +294,16 @@ class AmiVoiceRealtimeApp {
                 this.showNotification('音声録音を停止しました', 'info');
             };
             
-            // 中間結果更新
-            Wrp.resultUpdated = (result) => {
+            // 中間結果更新コールバック
+            this.wrp.resultUpdated = (result) => {
+                console.log('中間結果:', result);
                 const text = this.extractTextFromResult(result);
                 this.displayInterimResult(text);
             };
             
-            // 最終結果確定
-            Wrp.resultFinalized = (result) => {
+            // 最終結果確定コールバック
+            this.wrp.resultFinalized = (result) => {
+                console.log('最終結果:', result);
                 const text = this.extractTextFromResult(result);
                 if (text.trim()) {
                     this.addFinalResult(text, result);
@@ -200,9 +311,18 @@ class AmiVoiceRealtimeApp {
                     this.updateStats();
                 }
             };
-        } else {
-            console.warn('Wrpライブラリが見つかりません');
-            this.showNotification('Wrpライブラリが読み込まれていません', 'warning');
+            
+            // エラーコールバック
+            this.wrp.errored = (message) => {
+                console.error('Wrpエラー:', message);
+                this.showNotification(`音声認識エラー: ${message}`, 'error');
+            };
+            
+            console.log('✅ Wrpコールバックが設定されました');
+            
+        } catch (error) {
+            console.error('コールバック設定エラー:', error);
+            this.showNotification(`コールバック設定エラー: ${error.message}`, 'error');
         }
     }
     
@@ -219,8 +339,9 @@ class AmiVoiceRealtimeApp {
             return;
         }
         
-        if (typeof Wrp === 'undefined') {
-            this.showNotification('Wrpライブラリが読み込まれていません', 'error');
+        if (!this.wrp) {
+            this.showNotification('Wrpライブラリが初期化されていません', 'error');
+            console.error('Wrpインスタンスが null です');
             return;
         }
         
@@ -231,24 +352,38 @@ class AmiVoiceRealtimeApp {
             
             // Wrp設定
             const serverUrl = this.config?.amivoice_server_url || 'wss://acp-api.amivoice.com/v1/nolog/';
-            Wrp.setServerURL(serverUrl);
-            Wrp.setGrammarFileNames(grammar);
-            Wrp.setAuthorization(apiKey);
             
-            console.log('接続設定:', { serverUrl, grammar });
+            console.log('接続設定を開始...');
+            console.log('Wrpインスタンス:', this.wrp);
+            console.log('serverURL設定前:', this.wrp.serverURL);
+            
+            // サーバー設定
+            this.wrp.serverURL = serverUrl;
+            this.wrp.grammarFileNames = grammar;
+            this.wrp.authorization = apiKey;
+            
+            console.log('接続設定完了:', { 
+                serverUrl: this.wrp.serverURL,
+                grammar: this.wrp.grammarFileNames,
+                authLength: apiKey.length 
+            });
             
             // 接続実行
-            const connected = Wrp.connect();
+            console.log('接続を実行中...');
+            const connected = this.wrp.connect();
+            console.log('接続結果:', connected);
+            
             if (!connected) {
                 throw new Error('WebSocket接続の開始に失敗しました');
             }
+            
+            console.log('接続要求を送信しました');
             
         } catch (error) {
             console.error('接続エラー:', error);
             this.updateConnectionStatus('error', 'エラー');
             this.showNotification(`接続エラー: ${error.message}`, 'error');
             this.elements.connectBtn.disabled = false;
-        } finally {
             this.hideLoading();
         }
     }
@@ -262,23 +397,33 @@ class AmiVoiceRealtimeApp {
             return;
         }
         
-        if (typeof Wrp === 'undefined') {
-            this.showNotification('Wrpライブラリが読み込まれていません', 'error');
+        if (!this.wrp) {
+            this.showNotification('Wrpライブラリが初期化されていません', 'error');
             return;
         }
         
         console.log('録音開始要求');
-        Wrp.feedDataResume();
+        try {
+            this.wrp.feedDataResume();
+        } catch (error) {
+            console.error('録音開始エラー:', error);
+            this.showNotification(`録音開始エラー: ${error.message}`, 'error');
+        }
     }
     
     /**
      * 録音停止
      */
     pauseRecording() {
-        if (!this.isRecording) return;
+        if (!this.isRecording || !this.wrp) return;
         
         console.log('録音停止要求');
-        Wrp.feedDataPause();
+        try {
+            this.wrp.feedDataPause();
+        } catch (error) {
+            console.error('録音停止エラー:', error);
+            this.showNotification(`録音停止エラー: ${error.message}`, 'error');
+        }
     }
     
     /**
@@ -297,8 +442,13 @@ class AmiVoiceRealtimeApp {
     
     performDisconnect() {
         console.log('切断要求');
-        if (typeof Wrp !== 'undefined') {
-            Wrp.disconnect();
+        if (this.wrp) {
+            try {
+                this.wrp.disconnect();
+            } catch (error) {
+                console.error('切断エラー:', error);
+                this.showNotification(`切断エラー: ${error.message}`, 'error');
+            }
         }
     }
     
@@ -311,7 +461,7 @@ class AmiVoiceRealtimeApp {
             return result.text || '';
         } catch (error) {
             console.error('JSON解析エラー:', error);
-            return '';
+            return jsonResult; // JSONでない場合はそのまま返す
         }
     }
     
@@ -416,6 +566,7 @@ class AmiVoiceRealtimeApp {
         this.elements.recordBtn.disabled = false;
         this.elements.disconnectBtn.disabled = false;
         this.elements.connectBtn.disabled = true;
+        this.hideLoading();
     }
     
     resetControls() {
@@ -423,6 +574,7 @@ class AmiVoiceRealtimeApp {
         this.elements.recordBtn.disabled = true;
         this.elements.pauseBtn.disabled = true;
         this.elements.disconnectBtn.disabled = true;
+        this.hideLoading();
     }
     
     resetUIState() {
@@ -527,7 +679,7 @@ class AmiVoiceRealtimeApp {
         const isValid = apiKey.length > 10;
         
         this.elements.apiKey.style.borderColor = isValid ? '' : '#dc3545';
-        this.elements.connectBtn.disabled = !isValid;
+        this.elements.connectBtn.disabled = !isValid || !this.wrp;
     }
     
     /**
@@ -582,8 +734,8 @@ class AmiVoiceRealtimeApp {
      * クリーンアップ
      */
     cleanup() {
-        if (this.isConnected && typeof Wrp !== 'undefined') {
-            Wrp.disconnect();
+        if (this.isConnected && this.wrp) {
+            this.wrp.disconnect();
         }
     }
 }
