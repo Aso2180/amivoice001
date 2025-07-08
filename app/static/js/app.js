@@ -1,5 +1,5 @@
 /**
- * AmiVoice リアルタイム音声文字起こしアプリケーション - デバッグ版
+ * AmiVoice リアルタイム音声文字起こしアプリケーション - 音声入力対応版
  */
 class AmiVoiceRealtimeApp {
     constructor() {
@@ -9,6 +9,14 @@ class AmiVoiceRealtimeApp {
         this.transcriptionHistory = [];
         this.config = null;
         this.wrp = null;
+        
+        // 音声関連
+        this.audioContext = null;
+        this.mediaStream = null;
+        this.analyser = null;
+        this.dataArray = null;
+        this.audioSource = null;
+        this.audioWorkletNode = null;
         
         // 統計情報
         this.stats = {
@@ -110,6 +118,9 @@ class AmiVoiceRealtimeApp {
             // Wrpライブラリの確認と初期化
             this.initializeWrpLibrary();
             
+            // 音声システムの初期化
+            await this.initializeAudioSystem();
+            
             // UI状態の初期化
             this.resetUIState();
             
@@ -143,6 +154,90 @@ class AmiVoiceRealtimeApp {
         } catch (error) {
             console.error('設定読み込みエラー:', error);
             throw new Error('サーバーから設定を読み込めませんでした');
+        }
+    }
+    
+    /**
+     * 音声システムの初期化
+     */
+    async initializeAudioSystem() {
+        try {
+            console.log('🎵 音声システムを初期化中...');
+            
+            // MediaStreamの取得
+            this.mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 16000
+                }
+            });
+            
+            console.log('✅ マイクアクセス許可取得');
+            
+            // AudioContextの作成
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000
+            });
+            
+            // 音声解析用のAnalyserNode作成
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 256;
+            this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+            
+            // MediaStreamSourceの作成
+            this.audioSource = this.audioContext.createMediaStreamSource(this.mediaStream);
+            this.audioSource.connect(this.analyser);
+            
+            // 音声レベル監視の開始
+            this.startAudioLevelMonitoring();
+            
+            console.log('✅ 音声システム初期化完了');
+            this.showNotification('マイクが正常に初期化されました', 'success');
+            
+        } catch (error) {
+            console.error('音声システム初期化エラー:', error);
+            this.showNotification(`マイクアクセスエラー: ${error.message}`, 'error');
+            throw error;
+        }
+    }
+    
+    /**
+     * 音声レベル監視の開始
+     */
+    startAudioLevelMonitoring() {
+        const updateAudioLevel = () => {
+            if (this.analyser && this.dataArray) {
+                this.analyser.getByteFrequencyData(this.dataArray);
+                
+                // 音声レベルの計算
+                let sum = 0;
+                for (let i = 0; i < this.dataArray.length; i++) {
+                    sum += this.dataArray[i];
+                }
+                const average = sum / this.dataArray.length;
+                const percentage = Math.round((average / 255) * 100);
+                
+                // UI更新
+                this.updateAudioLevel(percentage);
+            }
+            
+            requestAnimationFrame(updateAudioLevel);
+        };
+        
+        updateAudioLevel();
+    }
+    
+    /**
+     * 音声レベル表示の更新
+     */
+    updateAudioLevel(percentage) {
+        if (this.elements.audioLevel) {
+            this.elements.audioLevel.style.width = `${percentage}%`;
+        }
+        if (this.elements.levelPercentage) {
+            this.elements.levelPercentage.textContent = `${percentage}%`;
         }
     }
     
@@ -282,6 +377,9 @@ class AmiVoiceRealtimeApp {
                 this.elements.recordBtn.disabled = true;
                 this.elements.pauseBtn.disabled = false;
                 this.showNotification('音声録音を開始しました', 'success');
+                
+                // 音声データ送信開始
+                this.startAudioDataStreaming();
             };
             
             // 録音停止完了コールバック
@@ -292,6 +390,9 @@ class AmiVoiceRealtimeApp {
                 this.elements.recordBtn.disabled = false;
                 this.elements.pauseBtn.disabled = true;
                 this.showNotification('音声録音を停止しました', 'info');
+                
+                // 音声データ送信停止
+                this.stopAudioDataStreaming();
             };
             
             // 中間結果更新コールバック
@@ -327,6 +428,57 @@ class AmiVoiceRealtimeApp {
     }
     
     /**
+     * 音声データストリーミング開始
+     */
+    startAudioDataStreaming() {
+        if (!this.mediaStream || !this.wrp) {
+            console.error('音声ストリームまたはWrpが初期化されていません');
+            return;
+        }
+        
+        console.log('🎵 音声データストリーミング開始');
+        
+        try {
+            // MediaRecorderの設定
+            const options = {
+                mimeType: 'audio/webm',
+                audioBitsPerSecond: 16000
+            };
+            
+            this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
+            
+            // データ受信時の処理
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0 && this.isRecording) {
+                    // Blobを配列バッファに変換してWrpに送信
+                    event.data.arrayBuffer().then(buffer => {
+                        const audioData = new Uint8Array(buffer);
+                        this.wrp.feedData(audioData);
+                        console.log('音声データ送信:', audioData.length, 'bytes');
+                    });
+                }
+            };
+            
+            // 録音開始
+            this.mediaRecorder.start(100); // 100msごとにデータを取得
+            
+        } catch (error) {
+            console.error('音声ストリーミング開始エラー:', error);
+            this.showNotification(`音声ストリーミングエラー: ${error.message}`, 'error');
+        }
+    }
+    
+    /**
+     * 音声データストリーミング停止
+     */
+    stopAudioDataStreaming() {
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            console.log('🎵 音声データストリーミング停止');
+            this.mediaRecorder.stop();
+        }
+    }
+    
+    /**
      * WebSocket接続
      */
     async connect() {
@@ -342,6 +494,11 @@ class AmiVoiceRealtimeApp {
         if (!this.wrp) {
             this.showNotification('Wrpライブラリが初期化されていません', 'error');
             console.error('Wrpインスタンスが null です');
+            return;
+        }
+        
+        if (!this.mediaStream) {
+            this.showNotification('マイクが初期化されていません', 'error');
             return;
         }
         
@@ -399,6 +556,11 @@ class AmiVoiceRealtimeApp {
         
         if (!this.wrp) {
             this.showNotification('Wrpライブラリが初期化されていません', 'error');
+            return;
+        }
+        
+        if (!this.mediaStream) {
+            this.showNotification('マイクが初期化されていません', 'error');
             return;
         }
         
@@ -734,6 +896,20 @@ class AmiVoiceRealtimeApp {
      * クリーンアップ
      */
     cleanup() {
+        // 音声ストリーミング停止
+        this.stopAudioDataStreaming();
+        
+        // メディアストリーム停止
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+        }
+        
+        // AudioContext停止
+        if (this.audioContext && this.audioContext.state !== 'closed') {
+            this.audioContext.close();
+        }
+        
+        // WebSocket切断
         if (this.isConnected && this.wrp) {
             this.wrp.disconnect();
         }
